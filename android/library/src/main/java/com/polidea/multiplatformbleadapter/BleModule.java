@@ -9,9 +9,11 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.ParcelUuid;
-import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
-import android.support.annotation.RequiresApi;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
+
 import android.util.SparseArray;
 
 import com.polidea.multiplatformbleadapter.errors.BleError;
@@ -30,30 +32,35 @@ import com.polidea.multiplatformbleadapter.utils.ServiceFactory;
 import com.polidea.multiplatformbleadapter.utils.UUIDConverter;
 import com.polidea.multiplatformbleadapter.utils.mapper.RxBleDeviceToDeviceMapper;
 import com.polidea.multiplatformbleadapter.utils.mapper.RxScanResultToScanResultMapper;
-import com.polidea.rxandroidble.NotificationSetupMode;
-import com.polidea.rxandroidble.RxBleAdapterStateObservable;
-import com.polidea.rxandroidble.RxBleClient;
-import com.polidea.rxandroidble.RxBleConnection;
-import com.polidea.rxandroidble.RxBleDevice;
-import com.polidea.rxandroidble.RxBleDeviceServices;
-import com.polidea.rxandroidble.internal.RxBleLog;
-import com.polidea.rxandroidble.scan.ScanFilter;
-import com.polidea.rxandroidble.scan.ScanSettings;
+import com.polidea.rxandroidble2.NotificationSetupMode;
+import com.polidea.rxandroidble2.RxBleAdapterStateObservable;
+import com.polidea.rxandroidble2.RxBleClient;
+import com.polidea.rxandroidble2.RxBleConnection;
+import com.polidea.rxandroidble2.RxBleDevice;
+import com.polidea.rxandroidble2.RxBleDeviceServices;
+import com.polidea.rxandroidble2.internal.RxBleLog;
+import com.polidea.rxandroidble2.scan.ScanFilter;
+import com.polidea.rxandroidble2.scan.ScanSettings;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 
-import rx.Observable;
-import rx.Observer;
-import rx.Subscription;
-import rx.functions.Action0;
-import rx.functions.Action1;
-import rx.functions.Func0;
-import rx.functions.Func1;
-import rx.schedulers.Schedulers;
+import io.reactivex.Observable;
+import io.reactivex.ObservableSource;
+import io.reactivex.disposables.Disposable;
+import io.reactivex.functions.Action;
+import io.reactivex.functions.Consumer;
+import io.reactivex.functions.Function;
+import io.reactivex.functions.Predicate;
+import io.reactivex.observers.DisposableCompletableObserver;
+import io.reactivex.observers.DisposableObserver;
+import io.reactivex.observers.DisposableSingleObserver;
+import io.reactivex.schedulers.Schedulers;
+
 
 import static com.polidea.multiplatformbleadapter.utils.Constants.BluetoothState;
 
@@ -64,39 +71,39 @@ public class BleModule implements BleAdapter {
     @Nullable
     private RxBleClient rxBleClient;
 
-    private HashMap<String, Device> discoveredDevices = new HashMap<>();
+    private final HashMap<String, Device> discoveredDevices = new HashMap<>();
 
-    private HashMap<String, Device> connectedDevices = new HashMap<>();
+    private final HashMap<String, Device> connectedDevices = new HashMap<>();
 
-    private HashMap<String, RxBleConnection> activeConnections = new HashMap<>();
+    private final HashMap<String, RxBleConnection> activeConnections = new HashMap<>();
 
-    private SparseArray<Service> discoveredServices = new SparseArray<>();
+    private final SparseArray<Service> discoveredServices = new SparseArray<>();
 
-    private SparseArray<Characteristic> discoveredCharacteristics = new SparseArray<>();
+    private final SparseArray<Characteristic> discoveredCharacteristics = new SparseArray<>();
 
-    private SparseArray<Descriptor> discoveredDescriptors = new SparseArray<>();
+    private final SparseArray<Descriptor> discoveredDescriptors = new SparseArray<>();
 
     private final DisposableMap pendingTransactions = new DisposableMap();
 
     private final DisposableMap connectingDevices = new DisposableMap();
 
-    private BluetoothManager bluetoothManager;
+    private final BluetoothManager bluetoothManager;
 
-    private BluetoothAdapter bluetoothAdapter;
+    private final BluetoothAdapter bluetoothAdapter;
 
-    private Context context;
-
-    @Nullable
-    private Subscription scanSubscription;
+    private final Context context;
 
     @Nullable
-    private Subscription adapterStateChangesSubscription;
+    private Disposable scanSubscription;
 
-    private RxBleDeviceToDeviceMapper rxBleDeviceToDeviceMapper = new RxBleDeviceToDeviceMapper();
+    @Nullable
+    private Disposable adapterStateChangesSubscription;
 
-    private RxScanResultToScanResultMapper rxScanResultToScanResultMapper = new RxScanResultToScanResultMapper();
+    private final RxBleDeviceToDeviceMapper rxBleDeviceToDeviceMapper = new RxBleDeviceToDeviceMapper();
 
-    private ServiceFactory serviceFactory = new ServiceFactory();
+    private final RxScanResultToScanResultMapper rxScanResultToScanResultMapper = new RxScanResultToScanResultMapper();
+
+    private final ServiceFactory serviceFactory = new ServiceFactory();
 
     private int currentLogLevel = RxBleLog.NONE;
 
@@ -122,11 +129,11 @@ public class BleModule implements BleAdapter {
     @Override
     public void destroyClient() {
         if (adapterStateChangesSubscription != null) {
-            adapterStateChangesSubscription.unsubscribe();
+            adapterStateChangesSubscription.dispose();
             adapterStateChangesSubscription = null;
         }
-        if (scanSubscription != null && !scanSubscription.isUnsubscribed()) {
-            scanSubscription.unsubscribe();
+        if (scanSubscription != null && !scanSubscription.isDisposed()) {
+            scanSubscription.dispose();
             scanSubscription = null;
         }
         pendingTransactions.removeAllSubscriptions();
@@ -196,7 +203,7 @@ public class BleModule implements BleAdapter {
     @Override
     public void stopDeviceScan() {
         if (scanSubscription != null) {
-            scanSubscription.unsubscribe();
+            scanSubscription.dispose();
             scanSubscription = null;
         }
     }
@@ -223,23 +230,23 @@ public class BleModule implements BleAdapter {
         final SafeExecutor<Device> safeExecutor = new SafeExecutor<>(onSuccessCallback, onErrorCallback);
 
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-            final Subscription subscription = connection
+            final Disposable subscription = connection
                     .requestConnectionPriority(connectionPriority, 1, TimeUnit.MILLISECONDS)
-                    .doOnUnsubscribe(new Action0() {
+                    .doOnDispose(new Action() {
                         @Override
-                        public void call() {
+                        public void run() {
                             safeExecutor.error(BleErrorUtils.cancelled());
                             pendingTransactions.removeSubscription(transactionId);
                         }
-                    }).subscribe(new Action0() {
+                    }).subscribe(new Action() {
                         @Override
-                        public void call() {
+                        public void run() {
                             safeExecutor.success(device);
                             pendingTransactions.removeSubscription(transactionId);
                         }
-                    }, new Action1<Throwable>() {
+                    }, new Consumer<Throwable>() {
                         @Override
-                        public void call(Throwable error) {
+                        public void accept(Throwable error) {
                             safeExecutor.error(errorConverter.toError(error));
                             pendingTransactions.removeSubscription(transactionId);
                         }
@@ -270,21 +277,16 @@ public class BleModule implements BleAdapter {
 
         final SafeExecutor<Device> safeExecutor = new SafeExecutor<>(onSuccessCallback, onErrorCallback);
 
-        final Subscription subscription = connection
+        final Disposable subscription = connection
                 .readRssi()
-                .doOnUnsubscribe(new Action0() {
+                .doOnDispose(new Action() {
                     @Override
-                    public void call() {
+                    public void run() {
                         safeExecutor.error(BleErrorUtils.cancelled());
                         pendingTransactions.removeSubscription(transactionId);
                     }
                 })
-                .subscribe(new Observer<Integer>() {
-                    @Override
-                    public void onCompleted() {
-                        pendingTransactions.removeSubscription(transactionId);
-                    }
-
+                .subscribeWith(new DisposableSingleObserver<Integer>() {
                     @Override
                     public void onError(Throwable error) {
                         safeExecutor.error(errorConverter.toError(error));
@@ -292,9 +294,10 @@ public class BleModule implements BleAdapter {
                     }
 
                     @Override
-                    public void onNext(Integer rssi) {
+                    public void onSuccess(Integer rssi) {
                         device.setRssi(rssi);
                         safeExecutor.success(device);
+                        pendingTransactions.removeSubscription(transactionId);
                     }
                 });
 
@@ -322,30 +325,27 @@ public class BleModule implements BleAdapter {
         final SafeExecutor<Device> safeExecutor = new SafeExecutor<>(onSuccessCallback, onErrorCallback);
 
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-            final Subscription subscription = connection
+            final Disposable subscription = connection
                     .requestMtu(mtu)
-                    .doOnUnsubscribe(new Action0() {
+                    .doOnDispose(new Action() {
                         @Override
-                        public void call() {
+                        public void run() {
                             safeExecutor.error(BleErrorUtils.cancelled());
                             pendingTransactions.removeSubscription(transactionId);
                         }
-                    }).subscribe(new Observer<Integer>() {
-                        @Override
-                        public void onCompleted() {
-                            pendingTransactions.removeSubscription(transactionId);
-                        }
-
+                    }).subscribeWith(new DisposableSingleObserver<Integer>() {
                         @Override
                         public void onError(Throwable error) {
                             safeExecutor.error(errorConverter.toError(error));
                             pendingTransactions.removeSubscription(transactionId);
                         }
 
+
                         @Override
-                        public void onNext(Integer mtu) {
+                        public void onSuccess(Integer mtu) {
                             device.setMtu(mtu);
                             safeExecutor.success(device);
+                            pendingTransactions.removeSubscription(transactionId);
                         }
                     });
 
@@ -824,20 +824,16 @@ public class BleModule implements BleAdapter {
 
         final SafeExecutor<Descriptor> safeExecutor = new SafeExecutor<>(onSuccessCallback, onErrorCallback);
 
-        final Subscription subscription = connection
+        final Disposable subscription = connection
                 .readDescriptor(descriptor.getNativeDescriptor())
-                .doOnUnsubscribe(new Action0() {
+                .doOnDispose(new Action() {
                     @Override
-                    public void call() {
+                    public void run() {
                         safeExecutor.error(BleErrorUtils.cancelled());
                         pendingTransactions.removeSubscription(transactionId);
                     }
                 })
-                .subscribe(new Observer<byte[]>() {
-                    @Override
-                    public void onCompleted() {
-                        pendingTransactions.removeSubscription(transactionId);
-                    }
+                .subscribeWith(new DisposableSingleObserver<byte[]>() {
 
                     @Override
                     public void onError(Throwable e) {
@@ -846,10 +842,11 @@ public class BleModule implements BleAdapter {
                     }
 
                     @Override
-                    public void onNext(byte[] bytes) {
+                    public void onSuccess(byte[] bytes) {
                         descriptor.logValue("Read from", bytes);
                         descriptor.setValue(bytes);
                         safeExecutor.success(new Descriptor(descriptor));
+                        pendingTransactions.removeSubscription(transactionId);
                     }
                 });
 
@@ -967,18 +964,18 @@ public class BleModule implements BleAdapter {
 
         final SafeExecutor<Descriptor> safeExecutor = new SafeExecutor<>(successCallback, errorCallback);
 
-        final Subscription subscription = connection
+        final Disposable disposable = connection
                 .writeDescriptor(nativeDescriptor, value)
-                .doOnUnsubscribe(new Action0() {
+                .doOnDispose(new Action() {
                     @Override
-                    public void call() {
+                    public void run() {
                         safeExecutor.error(BleErrorUtils.cancelled());
                         pendingTransactions.removeSubscription(transactionId);
                     }
                 })
-                .subscribe(new Observer<byte[]>() {
+                .subscribeWith(new DisposableCompletableObserver() {
                     @Override
-                    public void onCompleted() {
+                    public void onComplete() {
                         pendingTransactions.removeSubscription(transactionId);
                     }
 
@@ -987,16 +984,9 @@ public class BleModule implements BleAdapter {
                         safeExecutor.error(errorConverter.toError(e));
                         pendingTransactions.removeSubscription(transactionId);
                     }
-
-                    @Override
-                    public void onNext(byte[] bytes) {
-                        descriptor.logValue("Write to", bytes);
-                        descriptor.setValue(bytes);
-                        safeExecutor.success(new Descriptor(descriptor));
-                    }
                 });
 
-        pendingTransactions.replaceSubscription(transactionId, subscription);
+        pendingTransactions.replaceSubscription(transactionId, disposable);
     }
 
     // Mark: Descriptors getters -------------------------------------------------------------------
@@ -1104,22 +1094,22 @@ public class BleModule implements BleAdapter {
         return LogLevel.fromLogLevel(currentLogLevel);
     }
 
-    private Subscription monitorAdapterStateChanges(Context context,
-                                                    final OnEventCallback<String> onAdapterStateChangeCallback) {
+    private Disposable monitorAdapterStateChanges(Context context,
+                                                  final OnEventCallback<String> onAdapterStateChangeCallback) {
         if (!supportsBluetoothLowEnergy()) {
             return null;
         }
 
         return new RxBleAdapterStateObservable(context)
-                .map(new Func1<RxBleAdapterStateObservable.BleAdapterState, String>() {
+                .map(new Function<RxBleAdapterStateObservable.BleAdapterState, String>() {
                     @Override
-                    public String call(RxBleAdapterStateObservable.BleAdapterState bleAdapterState) {
+                    public String apply(RxBleAdapterStateObservable.BleAdapterState bleAdapterState) {
                         return mapRxBleAdapterStateToLocalBluetoothState(bleAdapterState);
                     }
                 })
-                .subscribe(new Action1<String>() {
+                .subscribe(new Consumer<String>() {
                     @Override
-                    public void call(String state) {
+                    public void accept(String state) {
                         onAdapterStateChangeCallback.onEvent(state);
                     }
                 });
@@ -1153,30 +1143,30 @@ public class BleModule implements BleAdapter {
 
         final SafeExecutor<Void> safeExecutor = new SafeExecutor<>(onSuccessCallback, onErrorCallback);
 
-        final Subscription subscription = new RxBleAdapterStateObservable(context)
-                .takeUntil(new Func1<RxBleAdapterStateObservable.BleAdapterState, Boolean>() {
+        final Disposable disposable = new RxBleAdapterStateObservable(context)
+                .takeUntil(new Predicate<RxBleAdapterStateObservable.BleAdapterState>() {
                     @Override
-                    public Boolean call(RxBleAdapterStateObservable.BleAdapterState actualAdapterState) {
+                    public boolean test(RxBleAdapterStateObservable.BleAdapterState actualAdapterState) {
                         return desiredAdapterState == actualAdapterState;
                     }
                 })
-                .toCompletable()
-                .doOnUnsubscribe(new Action0() {
+                .ignoreElements()
+                .doOnDispose(new Action() {
                     @Override
-                    public void call() {
+                    public void run() {
                         safeExecutor.error(BleErrorUtils.cancelled());
                         pendingTransactions.removeSubscription(transactionId);
                     }
                 })
-                .subscribe(new Action0() {
+                .subscribe(new Action() {
                     @Override
-                    public void call() {
+                    public void run() {
                         safeExecutor.success(null);
                         pendingTransactions.removeSubscription(transactionId);
                     }
-                }, new Action1<Throwable>() {
+                }, new Consumer<Throwable>() {
                     @Override
-                    public void call(Throwable error) {
+                    public void accept(Throwable error) {
                         safeExecutor.error(errorConverter.toError(error));
                         pendingTransactions.removeSubscription(transactionId);
                     }
@@ -1191,13 +1181,13 @@ public class BleModule implements BleAdapter {
         }
 
         if (desiredAndInitialStateAreSame) {
-            subscription.unsubscribe();
+            disposable.dispose();
             onErrorCallback.onError(new BleError(
                     BleErrorCode.BluetoothStateChangeFailed,
                     String.format("Couldn't set bluetooth adapter state to %s", desiredAdapterState.toString()),
                     null));
         } else {
-            pendingTransactions.replaceSubscription(transactionId, subscription);
+            pendingTransactions.replaceSubscription(transactionId, disposable);
         }
     }
 
@@ -1240,18 +1230,18 @@ public class BleModule implements BleAdapter {
 
         scanSubscription = rxBleClient
                 .scanBleDevices(scanSettings, filters)
-                .subscribe(new Action1<com.polidea.rxandroidble.scan.ScanResult>() {
+                .subscribe(new Consumer<com.polidea.rxandroidble2.scan.ScanResult>() {
                     @Override
-                    public void call(com.polidea.rxandroidble.scan.ScanResult scanResult) {
+                    public void accept(com.polidea.rxandroidble2.scan.ScanResult scanResult) throws Exception {
                         String deviceId = scanResult.getBleDevice().getMacAddress();
                         if (!discoveredDevices.containsKey(deviceId)) {
                             discoveredDevices.put(deviceId, rxBleDeviceToDeviceMapper.map(scanResult.getBleDevice(), null));
                         }
                         onEventCallback.onEvent(rxScanResultToScanResultMapper.map(scanResult));
                     }
-                }, new Action1<Throwable>() {
+                }, new Consumer<Throwable>() {
                     @Override
-                    public void call(Throwable throwable) {
+                    public void accept(Throwable throwable) throws Exception {
                         onErrorCallback.onError(errorConverter.toError(throwable));
                     }
                 });
@@ -1291,15 +1281,15 @@ public class BleModule implements BleAdapter {
 
         Observable<RxBleConnection> connect = device
                 .establishConnection(autoConnect)
-                .doOnSubscribe(new Action0() {
+                .doOnSubscribe(new Consumer<Disposable>() {
                     @Override
-                    public void call() {
+                    public void accept(Disposable disposable) {
                         onConnectionStateChangedCallback.onEvent(ConnectionState.CONNECTING);
                     }
                 })
-                .doOnUnsubscribe(new Action0() {
+                .doOnDispose(new Action() {
                     @Override
-                    public void call() {
+                    public void run() {
                         safeExecutor.error(BleErrorUtils.cancelled());
                         onDeviceDisconnected(device);
                         onConnectionStateChangedCallback.onEvent(ConnectionState.DISCONNECTED);
@@ -1307,14 +1297,14 @@ public class BleModule implements BleAdapter {
                 });
 
         if (refreshGattMoment == RefreshGattMoment.ON_CONNECTED) {
-            connect = connect.flatMap(new Func1<RxBleConnection, Observable<RxBleConnection>>() {
+            connect = connect.flatMap(new Function<RxBleConnection, Observable<RxBleConnection>>() {
                 @Override
-                public Observable<RxBleConnection> call(final RxBleConnection rxBleConnection) {
+                public Observable<RxBleConnection> apply(final RxBleConnection rxBleConnection) {
                     return rxBleConnection
                             .queue(new RefreshGattCustomOperation())
-                            .map(new Func1<Boolean, RxBleConnection>() {
+                            .map(new Function<Object, RxBleConnection>() {
                                 @Override
-                                public RxBleConnection call(Boolean refreshGattSuccess) {
+                                public RxBleConnection apply(Object refreshGattSuccess) {
                                     return rxBleConnection;
                                 }
                             });
@@ -1323,10 +1313,10 @@ public class BleModule implements BleAdapter {
         }
 
         if (connectionPriority > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            connect = connect.flatMap(new Func1<RxBleConnection, Observable<RxBleConnection>>() {
+            connect = connect.flatMap(new Function<RxBleConnection, Observable<RxBleConnection>>() {
                 @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
                 @Override
-                public Observable<RxBleConnection> call(final RxBleConnection rxBleConnection) {
+                public Observable<RxBleConnection> apply(final RxBleConnection rxBleConnection) {
                     return rxBleConnection
                             .requestConnectionPriority(connectionPriority, 1, TimeUnit.MILLISECONDS)
                             .andThen(Observable.just(rxBleConnection));
@@ -1335,41 +1325,43 @@ public class BleModule implements BleAdapter {
         }
 
         if (requestMtu > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            connect = connect.flatMap(new Func1<RxBleConnection, Observable<RxBleConnection>>() {
+            connect = connect.flatMap(new Function<RxBleConnection, Observable<RxBleConnection>>() {
                 @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
                 @Override
-                public Observable<RxBleConnection> call(final RxBleConnection rxBleConnection) {
+                public Observable<RxBleConnection> apply(final RxBleConnection rxBleConnection) {
                     return rxBleConnection
                             .requestMtu(requestMtu)
-                            .map(new Func1<Integer, RxBleConnection>() {
+                            .map(new Function<Integer, RxBleConnection>() {
                                 @Override
-                                public RxBleConnection call(Integer integer) {
+                                public RxBleConnection apply(Integer integer) {
                                     return rxBleConnection;
                                 }
-                            });
+                            }).toObservable();
                 }
             });
         }
 
         if (timeout != null) {
-            connect = connect.timeout(new Func0<Observable<Long>>() {
-                @Override
-                public Observable<Long> call() {
-                    return Observable.timer(timeout, TimeUnit.MILLISECONDS);
-                }
-            }, new Func1<RxBleConnection, Observable<Long>>() {
-                @Override
-                public Observable<Long> call(RxBleConnection rxBleConnection) {
-                    return Observable.never();
-                }
-            });
+            connect = connect.timeout(timeout, TimeUnit.MILLISECONDS)
+                    .onErrorResumeNext(new Function<Throwable, ObservableSource<RxBleConnection>>() {
+                        @Override
+                        public ObservableSource<RxBleConnection> apply(Throwable throwable) throws Exception {
+                            return Observable.never();
+                        }
+                    });
         }
 
 
-        final Subscription subscription = connect
-                .subscribe(new Observer<RxBleConnection>() {
+        final Disposable subscription = connect
+                .subscribeWith(new DisposableObserver<RxBleConnection>() {
                     @Override
-                    public void onCompleted() {
+                    public void onNext(RxBleConnection rxBleConnection) {
+                        Device localDevice = rxBleDeviceToDeviceMapper.map(device, rxBleConnection);
+                        onConnectionStateChangedCallback.onEvent(ConnectionState.CONNECTED);
+                        cleanServicesAndCharacteristicsForDevice(localDevice);
+                        connectedDevices.put(device.getMacAddress(), localDevice);
+                        activeConnections.put(device.getMacAddress(), rxBleConnection);
+                        safeExecutor.success(localDevice);
                     }
 
                     @Override
@@ -1380,14 +1372,11 @@ public class BleModule implements BleAdapter {
                     }
 
                     @Override
-                    public void onNext(RxBleConnection connection) {
-                        Device localDevice = rxBleDeviceToDeviceMapper.map(device, connection);
-                        onConnectionStateChangedCallback.onEvent(ConnectionState.CONNECTED);
-                        cleanServicesAndCharacteristicsForDevice(localDevice);
-                        connectedDevices.put(device.getMacAddress(), localDevice);
-                        activeConnections.put(device.getMacAddress(), connection);
-                        safeExecutor.success(localDevice);
+                    public void onComplete() {
+
                     }
+
+
                 });
 
         connectingDevices.replaceSubscription(device.getMacAddress(), subscription);
@@ -1415,22 +1404,16 @@ public class BleModule implements BleAdapter {
 
         final SafeExecutor<Device> safeExecutor = new SafeExecutor<>(onSuccessCallback, onErrorCallback);
 
-        final Subscription subscription = connection
+        final Disposable subscription = connection
                 .discoverServices()
-                .doOnUnsubscribe(new Action0() {
+                .doOnDispose(new Action() {
                     @Override
-                    public void call() {
+                    public void run() {
                         safeExecutor.error(BleErrorUtils.cancelled());
                         pendingTransactions.removeSubscription(transactionId);
                     }
                 })
-                .subscribe(new Observer<RxBleDeviceServices>() {
-                    @Override
-                    public void onCompleted() {
-                        safeExecutor.success(device);
-                        pendingTransactions.removeSubscription(transactionId);
-                    }
-
+                .subscribeWith(new DisposableSingleObserver<RxBleDeviceServices>() {
                     @Override
                     public void onError(Throwable error) {
                         safeExecutor.error(errorConverter.toError(error));
@@ -1438,7 +1421,7 @@ public class BleModule implements BleAdapter {
                     }
 
                     @Override
-                    public void onNext(RxBleDeviceServices rxBleDeviceServices) {
+                    public void onSuccess(RxBleDeviceServices rxBleDeviceServices) {
                         ArrayList<Service> services = new ArrayList<>();
                         for (BluetoothGattService gattService : rxBleDeviceServices.getBluetoothGattServices()) {
                             Service service = serviceFactory.create(device.getId(), gattService);
@@ -1456,6 +1439,9 @@ public class BleModule implements BleAdapter {
                             }
                         }
                         device.setServices(services);
+
+                        safeExecutor.success(device);
+                        pendingTransactions.removeSubscription(transactionId);
                     }
                 });
 
@@ -1473,21 +1459,16 @@ public class BleModule implements BleAdapter {
 
         final SafeExecutor<Characteristic> safeExecutor = new SafeExecutor<>(onSuccessCallback, onErrorCallback);
 
-        final Subscription subscription = connection
+        final Disposable subscription = connection
                 .readCharacteristic(characteristic.gattCharacteristic)
-                .doOnUnsubscribe(new Action0() {
+                .doOnDispose(new Action() {
                     @Override
-                    public void call() {
+                    public void run() {
                         safeExecutor.error(BleErrorUtils.cancelled());
                         pendingTransactions.removeSubscription(transactionId);
                     }
                 })
-                .subscribe(new Observer<byte[]>() {
-                    @Override
-                    public void onCompleted() {
-                        pendingTransactions.removeSubscription(transactionId);
-                    }
-
+                .subscribeWith(new DisposableSingleObserver<byte[]>() {
                     @Override
                     public void onError(Throwable error) {
                         safeExecutor.error(errorConverter.toError(error));
@@ -1495,10 +1476,11 @@ public class BleModule implements BleAdapter {
                     }
 
                     @Override
-                    public void onNext(byte[] bytes) {
+                    public void onSuccess(byte[] bytes) {
                         characteristic.logValue("Read from", bytes);
                         characteristic.setValue(bytes);
                         safeExecutor.success(new Characteristic(characteristic));
+                        pendingTransactions.removeSubscription(transactionId);
                     }
                 });
 
@@ -1545,18 +1527,22 @@ public class BleModule implements BleAdapter {
 
         final SafeExecutor<Characteristic> safeExecutor = new SafeExecutor<>(onSuccessCallback, onErrorCallback);
 
-        final Subscription subscription = connection
+        final Disposable subscription = connection
                 .writeCharacteristic(characteristic.gattCharacteristic, value)
-                .doOnUnsubscribe(new Action0() {
+                .doOnDispose(new Action() {
                     @Override
-                    public void call() {
+                    public void run() {
                         safeExecutor.error(BleErrorUtils.cancelled());
                         pendingTransactions.removeSubscription(transactionId);
                     }
                 })
-                .subscribe(new Observer<byte[]>() {
+                .subscribeWith(new DisposableSingleObserver<byte[]>() {
+
                     @Override
-                    public void onCompleted() {
+                    public void onSuccess(byte[] bytes) {
+                        characteristic.logValue("Write to", bytes);
+                        characteristic.setValue(bytes);
+                        safeExecutor.success(new Characteristic(characteristic));
                         pendingTransactions.removeSubscription(transactionId);
                     }
 
@@ -1566,12 +1552,6 @@ public class BleModule implements BleAdapter {
                         pendingTransactions.removeSubscription(transactionId);
                     }
 
-                    @Override
-                    public void onNext(byte[] bytes) {
-                        characteristic.logValue("Write to", bytes);
-                        characteristic.setValue(bytes);
-                        safeExecutor.success(new Characteristic(characteristic));
-                    }
                 });
 
         pendingTransactions.replaceSubscription(transactionId, subscription);
@@ -1588,42 +1568,41 @@ public class BleModule implements BleAdapter {
 
         final SafeExecutor<Void> safeExecutor = new SafeExecutor<>(null, onErrorCallback);
 
-        final Subscription subscription = Observable.defer(new Func0<Observable<Observable<byte[]>>>() {
-            @Override
-            public Observable<Observable<byte[]>> call() {
-                BluetoothGattDescriptor cccDescriptor = characteristic.getGattDescriptor(Constants.CLIENT_CHARACTERISTIC_CONFIG_UUID);
-                NotificationSetupMode setupMode = cccDescriptor != null
-                        ? NotificationSetupMode.QUICK_SETUP
-                        : NotificationSetupMode.COMPAT;
-                if (characteristic.isNotifiable()) {
-                    return connection.setupNotification(characteristic.gattCharacteristic, setupMode);
-                }
-
-                if (characteristic.isIndicatable()) {
-                    return connection.setupIndication(characteristic.gattCharacteristic, setupMode);
-                }
-
-                return Observable.error(new CannotMonitorCharacteristicException(characteristic));
-            }
-        })
-                .flatMap(new Func1<Observable<byte[]>, Observable<byte[]>>() {
+        final Disposable disposable = Observable.defer(new Callable<ObservableSource<Observable<byte[]>>>() {
                     @Override
-                    public Observable<byte[]> call(Observable<byte[]> observable) {
+                    public ObservableSource<Observable<byte[]>> call() throws Exception {
+                        BluetoothGattDescriptor cccDescriptor = characteristic.getGattDescriptor(Constants.CLIENT_CHARACTERISTIC_CONFIG_UUID);
+                        NotificationSetupMode setupMode = cccDescriptor != null
+                                ? NotificationSetupMode.QUICK_SETUP
+                                : NotificationSetupMode.COMPAT;
+                        if (characteristic.isNotifiable()) {
+                            return connection.setupNotification(characteristic.gattCharacteristic, setupMode);
+                        }
+
+                        if (characteristic.isIndicatable()) {
+                            return connection.setupIndication(characteristic.gattCharacteristic, setupMode);
+                        }
+
+                        return Observable.error(new CannotMonitorCharacteristicException(characteristic));
+                    }
+                })
+                .flatMap(new Function<Observable<byte[]>, Observable<byte[]>>() {
+                    @Override
+                    public Observable<byte[]> apply(Observable<byte[]> observable) throws Exception {
                         return observable;
                     }
                 })
-                .onBackpressureBuffer()
                 .observeOn(Schedulers.computation())
-                .doOnUnsubscribe(new Action0() {
+                .doOnDispose(new Action() {
                     @Override
-                    public void call() {
+                    public void run() {
                         safeExecutor.error(BleErrorUtils.cancelled());
                         pendingTransactions.removeSubscription(transactionId);
                     }
                 })
-                .subscribe(new Observer<byte[]>() {
+                .subscribeWith(new DisposableObserver<byte[]>() {
                     @Override
-                    public void onCompleted() {
+                    public void onComplete() {
                         pendingTransactions.removeSubscription(transactionId);
                     }
 
@@ -1641,7 +1620,7 @@ public class BleModule implements BleAdapter {
                     }
                 });
 
-        pendingTransactions.replaceSubscription(transactionId, subscription);
+        pendingTransactions.replaceSubscription(transactionId, disposable);
     }
 
     @Nullable
